@@ -4,6 +4,40 @@ const express = require('express');
 const app = express();
 const PORT = 3000;
 
+// This is the session management middleware
+// created by the Express.js team
+const session = require('express-session');
+
+// Give us a modified version of the Express team's
+// session management software.
+// We want one that can save session info a file
+// on the hard drive.
+const FileStore = require('session-file-store')(session);
+app.use(session({
+    store: new FileStore({}),
+
+    // We will move this to a secure location, shortly.
+    secret: 'lalala1234lalala'
+}));
+
+// When we app.use(session), the session middleware
+// adds the variable `req.session` 
+
+// As the user browses from page to page, their
+// browser shows us a "cookie"
+// and the session middleware attaches that user's 
+// session info to the request.
+
+
+// Let's see what's in the session!!!!
+app.use((req, res, next) =>  {
+    console.log('***********');
+    console.log(req.session);
+    console.log('***********');
+
+    next();
+});
+
 const es6Renderer = require('express-es6-template-engine');
 app.engine('html', es6Renderer);
 app.set('views', 'templates');
@@ -30,6 +64,7 @@ const { dateToFormattedString } = require('./utils');
 const server = http.createServer(app);
 
 const pets = require('./models/pets');
+const owners = require('./models/owners');
 
 
 // See all pets!
@@ -57,8 +92,18 @@ app.get('/pets/:id(\\d+)', async (req, res) => {
 
 // Hint: npm i body-parser
 
+function requireLogin(req, res, next) {
+    if (req.session && req.session.user) {
+        console.log('requireLogin says you are ok')
+        next();
+    } else {
+        console.log('Stranger Danger!')
+        res.redirect('/login');
+    }
+};
+
 // Create
-app.get('/pets/create', (req, res) => {
+app.get('/pets/create', requireLogin, (req, res) => {
     console.log('you want the form');
     // console.log('yes you are at /pets/create');
     // res.send('yes you are at /pets/create');
@@ -72,7 +117,7 @@ app.get('/pets/create', (req, res) => {
         }
     });
 });
-app.post('/pets/create', parseForm, async (req, res) => {
+app.post('/pets/create', requireLogin, parseForm, async (req, res) => {
     console.log(req.body.name);
     console.log(req.body.species);
     console.log(req.body.birthdate);
@@ -85,15 +130,15 @@ app.post('/pets/create', parseForm, async (req, res) => {
     // I could create a new pet!
     // and I'm going to hard code the owner id!
 
-    const owner_id_CHANGEME = 1;
-    const newPetId = await pets.create(name, species, birthdate, owner_id_CHANGEME);
+    const owner_id = req.session.user.id;
+    const newPetId = await pets.create(name, species, birthdate, owner_id);
     console.log(`The new pet id is ${newPetId}`);
 
     res.redirect(`/pets/${newPetId}`);
 });
 
 // Update
-app.get('/pets/:id/edit', async (req, res) => {
+app.get('/pets/:id/edit', requireLogin, async (req, res) => {
 
     const { id } = req.params;
     // const id = req.params.id;
@@ -108,7 +153,7 @@ app.get('/pets/:id/edit', async (req, res) => {
         }
     });
 });
-app.post('/pets/:id/edit', parseForm, async (req, res) => {
+app.post('/pets/:id/edit', requireLogin, parseForm, async (req, res) => {
     const { name, species, birthdate } = req.body;
     const { id } = req.params;
     const result = await pets.update(id, name, species, birthdate);
@@ -122,6 +167,53 @@ app.post('/pets/:id/edit', parseForm, async (req, res) => {
 // Delete
 app.get('/pets/:id/delete')
 app.post('/pets/:id/delete')
+
+// Login!
+app.get('/login', (req, res) => {
+    res.render('owners/auth');
+});
+app.post('/login', parseForm, async (req, res) => {
+    console.log(req.body);
+    const { name, password } = req.body;
+    const didLoginSuccessfully = await owners.login(name, password);
+    if (didLoginSuccessfully) {
+        console.log(`yay! you logged in!`);
+
+        // Assuming users have unique names:
+        const theUser = await owners.getByUsername(name);
+
+        // Add some info to the user's session
+        req.session.user = {
+            name,
+            id: theUser.id
+        };
+        req.session.save(() => {
+            console.log('The session is now saved!!!');
+            // This avoids a long-standing
+            // bug in the session middleware
+            res.redirect('/profile');
+        });
+    } else {
+        console.log(`boooooooo. that is not correct`);
+    }
+});
+
+app.get('/logout', (req, res) => {
+    // Get rid of the user's session!
+    // Then redirect them to the login page.
+    req.session.destroy(() => {
+        console.log('The session is now destroyed!!!');
+        // This avoids a long-standing
+        // bug in the session middleware
+        res.redirect('/login');
+    });
+    
+})
+
+// "Profile" - list pets for this owner
+app.get('/profile', (req, res) => {
+    res.send(`Welcome back ${req.session.user.name}`)
+});
 
 server.listen(PORT, () => {
     console.log(`Listening on port ${PORT}`);
